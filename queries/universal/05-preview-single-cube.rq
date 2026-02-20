@@ -42,10 +42,20 @@ WHERE {
 
         # Property shape triples (SHACL property definitions)
         OPTIONAL {
-            ?cube cube:observationConstraint/sh:property ?property .
-            ?property (<>|!<>)* ?propertyS .
-            ?propertyS ?propertyP ?propertyO .
-            BIND(CONCAT(STR(?propertyS), "|", STR(?propertyP), "|", STR(?propertyO)) AS ?propTriple)
+            ?cube cube:observationConstraint ?shapeP .
+            ?shapeP sh:property ?property .
+            ?property ?propertyP ?propertyO .
+            BIND(CONCAT(STR(?property), "|", STR(?propertyP), "|", STR(?propertyO)) AS ?propTriple)
+        }
+
+        # RDF list triples in property shapes (sh:in lists)
+        OPTIONAL {
+            ?cube cube:observationConstraint ?shapeL .
+            ?shapeL sh:property ?propertyL .
+            ?propertyL sh:in ?listNode .
+            ?listNode rdf:rest*/rdf:first ?listItem .
+            ?listNode ?listP ?listO .
+            BIND(CONCAT(STR(?listNode), "|", STR(?listP), "|", STR(?listO)) AS ?propTriple)
         }
 
         # Observation set triples

@@ -1,11 +1,13 @@
 # Query 8: DELETE observation links from observation set
+# PARAMETERS:
+#   - Replace GRAPH_URI with the target graph
+#   - Replace CUBE_URI with the cube URI
 # Run this AFTER deleting observation data (query 07)
-# Replace CUBE_URI_HERE with the actual cube URI
 # Uses subquery with LIMIT for valid SPARQL 1.1 Update chunking
 
 PREFIX cube: <https://cube.link/>
 
-WITH <https://lindas.admin.ch/sfoe/cube>
+WITH <GRAPH_URI>
 DELETE {
   ?set cube:observation ?observationS .
 }
@@ -13,7 +15,7 @@ WHERE {
   {
     SELECT ?set ?observationS
     WHERE {
-      BIND(<CUBE_URI_HERE> AS ?cube)
+      BIND(<CUBE_URI> AS ?cube)
 
       ?cube cube:observationSet ?set .
       ?set cube:observation ?observationS .

@@ -1,12 +1,14 @@
 # Query 7: DELETE observations in chunks (for large cubes)
+# PARAMETERS:
+#   - Replace GRAPH_URI with the target graph
+#   - Replace CUBE_URI with the cube URI
 # Most triples are in observations - delete these first in batches
-# Replace CUBE_URI_HERE with the actual cube URI
 # Run multiple times until no more observations exist
 # Uses subquery with LIMIT for valid SPARQL 1.1 Update chunking
 
 PREFIX cube: <https://cube.link/>
 
-WITH <https://lindas.admin.ch/sfoe/cube>
+WITH <GRAPH_URI>
 DELETE {
   ?observationS ?observationP ?observationO .
 }
@@ -14,7 +16,7 @@ WHERE {
   {
     SELECT ?observationS ?observationP ?observationO
     WHERE {
-      BIND(<CUBE_URI_HERE> AS ?cube)
+      BIND(<CUBE_URI> AS ?cube)
 
       ?cube cube:observationSet ?set .
       ?set cube:observation ?observationS .

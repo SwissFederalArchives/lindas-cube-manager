@@ -13,6 +13,14 @@ COPY web-app/public/ ./public/
 # Copy query files
 COPY queries/ ./queries/
 
+# Create directories for runtime data
+RUN mkdir -p /app/backups /app/exports /app/uploads
+
+# Create non-root user for security
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN chown -R appuser:appgroup /app
+USER appuser
+
 # Disable destructive API by default
 ENV ENABLE_DESTRUCTIVE_API=false
 ENV PORT=3001

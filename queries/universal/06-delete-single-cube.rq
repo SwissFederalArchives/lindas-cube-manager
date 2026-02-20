@@ -5,7 +5,8 @@
 # WARNING: This is a destructive operation!
 #
 # Uses BIND pattern instead of FILTER for Stardog compatibility.
-# Uses bidirectional matching to catch all references.
+# Incoming-reference branches are scoped to the cube's own structure
+# to avoid deleting triples from other cubes that reference this one.
 # See: docs/sparql-query-review-2026-02-02.md
 
 PREFIX cube: <https://cube.link/>
@@ -28,12 +29,6 @@ WHERE {
     }
     UNION
     {
-      # Cube incoming triples (anything pointing TO this cube)
-      ?s ?p ?targetCube .
-      BIND(?targetCube AS ?o)
-    }
-    UNION
-    {
       # Blank node properties attached to the cube
       ?targetCube ?p1 ?bn .
       FILTER(isBlank(?bn))
@@ -46,13 +41,6 @@ WHERE {
       ?targetCube cube:observationConstraint ?shape .
       ?shape ?p ?o .
       BIND(?shape AS ?s)
-    }
-    UNION
-    {
-      # SHACL NodeShape - incoming
-      ?targetCube cube:observationConstraint ?shape .
-      ?s ?p ?shape .
-      BIND(?shape AS ?o)
     }
     UNION
     {
@@ -81,26 +69,11 @@ WHERE {
     }
     UNION
     {
-      # ObservationSet - incoming
-      ?targetCube cube:observationSet ?obsSet .
-      ?s ?p ?obsSet .
-      BIND(?obsSet AS ?o)
-    }
-    UNION
-    {
       # Observations - outgoing
       ?targetCube cube:observationSet ?obsSet .
       ?obsSet cube:observation ?obs .
       ?obs ?p ?o .
       BIND(?obs AS ?s)
-    }
-    UNION
-    {
-      # Observations - incoming
-      ?targetCube cube:observationSet ?obsSet .
-      ?obsSet cube:observation ?obs .
-      ?s ?p ?obs .
-      BIND(?obs AS ?o)
     }
   }
 }

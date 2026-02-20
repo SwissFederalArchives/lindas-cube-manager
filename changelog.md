@@ -2,6 +2,124 @@
 
 All notable changes to the LINDAS Cube Version Cleanup Tool are documented in this file.
 
+## [2026-02-20] - Fix 504 Gateway Timeout on Large Cube Observation Deletion
+
+### Fixed
+
+- **504 Gateway Timeout during observation deletion** (`/api/cubes/delete-observations`):
+  The endpoint previously sent a single unbounded SPARQL DELETE with no LIMIT, causing
+  Nginx/proxy gateway timeouts (30s) for large cube versions. Replaced with a server-side
+  chunked loop: repeatedly executes `DELETE { ... } WHERE { { SELECT ... LIMIT 100000 } }`
+  until the observation count reaches zero. Each individual DELETE request now completes
+  well within the 30-second gateway timeout. `chunksProcessed` is returned in the response
+  for diagnostics.
+
+## [2026-02-20] - Fix V8 String Limit and Add Buffer Support for Multi-Cube Backup
+
+### Fixed
+
+- **V8 string length limit exceeded during multi-cube backup** (`/api/backup/create-multi`):
+  Changed `response.text()` to `Buffer.from(await response.arrayBuffer())` to avoid V8's
+  ~512MB string limit when backing up many large cubes. Updated newline counting to use a
+  byte-level loop (counting `0x0A` bytes). Updated `createZipBackup()` to handle both
+  `string` and `Buffer` inputs for the `triples` parameter.
+
+### Added
+
+- **`web-app/start-destructive.bat`**: Helper script to start the server with
+  `ENABLE_DESTRUCTIVE_API=true` from the correct working directory. For dev/test use only.
+
+## [2026-02-18] - Code Review Fixes: Security, SPARQL, Frontend, Docker
+
+### Fixed (Security - server.js)
+
+- **URI validation regex bug**: Fixed character class in `validateUriParam` that contained
+  a misplaced space and comma, and added parentheses to blocked characters.
+
+- **SPARQL injection via searchTerm**: Replaced weak backslash/double-quote escape with
+  a whitelist regex that only allows safe URI characters in search terms.
+
+- **Multer upload size limit**: Added 200MB file size limit to prevent DoS via oversized
+  file uploads.
+
+- **SSRF protection**: Added `validateEndpointUrl()` helper that rejects non-HTTP protocols
+  and private IP ranges (while allowing localhost for local development).
+
+- **Backup identity validation (TOCTOU)**: Added `validateBackupCoversUri()` that opens
+  the backup ZIP at deletion time to verify the cube URI is listed in the manifest, closing
+  the time-of-check-time-of-use gap.
+
+- **Auth bypass on query execute**: The `/api/query/execute` endpoint now checks
+  `API_AUTH_TOKEN` for UPDATE queries, not just `ENABLE_DESTRUCTIVE_API`.
+
+- **Auth bypass on backup endpoints**: Added `requireDestructiveAccess` middleware to
+  `/api/backup/create`, `/api/backup/create-multi`, and `/api/backup/upload`.
+
+- **Multi-cube backup partial failure**: Backup creation now tracks failed cubes and
+  returns HTTP 207 with a `cubesNotBackedUp` list when some cubes fail.
+
+### Fixed (Frontend - app.js)
+
+- **Wizard state leak**: `resetWizard()` now clears `selectedCubesForDeletion` set.
+
+- **Deletion button not re-enabled on error**: Wrapped `wizardExecuteDeletion()` body
+  in try/finally to ensure the execute button is always re-enabled.
+
+- **Duplicate checkbox IDs**: Backup section select-all now uses unique ID
+  `backup-select-all-cubes` to avoid collision with wizard section.
+
+- **Event listener accumulation**: Select-all checkbox is now cloned before adding a
+  new event listener, preventing duplicate handler buildup.
+
+- **Silent total failure**: Added explicit error log when all cube deletions fail.
+
+- **Queue item ID collisions**: Changed queue item IDs to index-based format.
+
+- **Progress bar stuck on download error**: Added hidden class to progress container
+  in download error catch block.
+
+- **Backup export URL encoding**: Added `encodeURIComponent()` for backup IDs in export
+  download URL to handle special characters.
+
+- **Wrong state property for Fuseki dataset**: Changed `state.datasetName` to
+  `state.fusekiDataset` in input handler.
+
+### Fixed (SPARQL Queries)
+
+- **Query 03 (root + universal)**: Added FILTER to exclude non-versioned cube URIs from
+  version ranking, preventing unversioned cubes from appearing as deletion candidates.
+
+- **Query 05 (root)**: Replaced unbounded property path `(<>|!<>)*` with specific SHACL
+  property traversal (sh:property direct + sh:in RDF lists) to avoid runaway traversal.
+
+- **Query 05 (universal)**: Same property path fix as root version.
+
+- **Query 06 (root + universal)**: Removed incoming-reference UNION branches
+  (`?s ?p ?targetCube`, `?s ?p ?shape`, `?s ?p ?obsSet`, `?s ?p ?obs`) that could
+  delete triples belonging to other cubes that reference this one.
+
+- **Query 07 (root)**: Moved LIMIT into a subquery for valid SPARQL 1.1 Update chunking
+  (LIMIT on DELETE WHERE is not valid SPARQL 1.1).
+
+- **Query 08 (root)**: Same LIMIT-into-subquery fix as query 07.
+
+- **Query 09 (root + universal)**: Removed incoming-reference branches matching the
+  same fix applied to query 06.
+
+### Added (SPARQL Queries)
+
+- **Universal versions for queries 07-10**: Created parameterized universal versions
+  with GRAPH_URI placeholder for queries 07 (delete observations chunked),
+  08 (delete observation links), 09 (delete cube metadata), and 10 (count observations).
+
+### Changed (Docker)
+
+- **Dockerfile**: Added non-root user (`appuser`) for container security; created
+  runtime directories (backups, exports, uploads) with proper ownership.
+
+- **docker-compose.yml**: Removed deprecated `version` key; added volume mounts for
+  exports/ and uploads/ directories; added memory limit (512M).
+
 ## [2026-02-18] - Bug Fixes: API Contracts, Security, and Reliability
 
 ### Fixed

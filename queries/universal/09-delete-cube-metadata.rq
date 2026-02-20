@@ -1,7 +1,9 @@
 # Query 9: DELETE cube metadata and shapes
+# PARAMETERS:
+#   - Replace GRAPH_URI with the target graph
+#   - Replace CUBE_URI with the cube URI
 # Run this AFTER deleting all observations (or use query 06 for full deletion)
 # This removes the cube structure, shapes, and metadata
-# Replace CUBE_URI_HERE with the actual cube URI
 #
 # Uses BIND pattern instead of FILTER for Stardog compatibility.
 # Incoming-reference branches are scoped to the cube's own structure
@@ -13,13 +15,13 @@ PREFIX sh: <http://www.w3.org/ns/shacl#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
 DELETE {
-  GRAPH <https://lindas.admin.ch/sfoe/cube> {
+  GRAPH <GRAPH_URI> {
     ?s ?p ?o .
   }
 }
 WHERE {
-  GRAPH <https://lindas.admin.ch/sfoe/cube> {
-    VALUES ?targetCube { <CUBE_URI_HERE> }
+  GRAPH <GRAPH_URI> {
+    VALUES ?targetCube { <CUBE_URI> }
 
     {
       # Cube outgoing triples

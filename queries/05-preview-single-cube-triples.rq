@@ -37,11 +37,23 @@ WHERE {
     }
     UNION
     {
-      # Property Shapes (deep traversal)
-      ?cube cube:observationConstraint/sh:property ?property .
-      ?property (<>|!<>)* ?subject .
-      ?subject ?predicate ?object .
+      # Property Shapes (direct properties)
+      ?cube cube:observationConstraint ?shape2 .
+      ?shape2 sh:property ?property .
+      ?property ?predicate ?object .
+      BIND(?property AS ?subject)
       BIND("property-shape" AS ?category)
+    }
+    UNION
+    {
+      # RDF list items in property shapes (sh:in lists)
+      ?cube cube:observationConstraint ?shape3 .
+      ?shape3 sh:property ?property2 .
+      ?property2 sh:in ?list .
+      ?list rdf:rest*/rdf:first ?item .
+      ?list ?predicate ?object .
+      BIND(?list AS ?subject)
+      BIND("property-shape-list" AS ?category)
     }
     UNION
     {

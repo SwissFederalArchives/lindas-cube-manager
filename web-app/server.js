@@ -55,7 +55,7 @@ function validateUriParam(uri, paramName) {
     if (!/^https?:\/\//.test(uri)) {
         throw new Error(`${paramName} has invalid URI scheme`);
     }
-    const dangerousChars = /[<>", "{}|\\^`\n\r\t]/;
+    const dangerousChars = /[<>"{}|\\^`()\n\r\t]/;
     if (dangerousChars.test(uri)) {
         throw new Error(`${paramName} contains invalid characters`);
     }
@@ -95,6 +95,76 @@ function validateBackupId(backupId) {
     }
 }
 
+/**
+ * Validate that a backup ZIP actually covers the given cube URI(s).
+ * Opens the ZIP, reads the manifest, and checks that the cubeUri is listed.
+ * Throws an error if the backup does not cover the cube.
+ */
+function validateBackupCoversUri(backupZipPath, cubeUri) {
+    try {
+        const zip = new AdmZip(backupZipPath);
+        const manifestEntry = zip.getEntry('manifest.json');
+        if (!manifestEntry) {
+            throw new Error('Backup ZIP does not contain a manifest.json');
+        }
+        const manifest = JSON.parse(manifestEntry.getData().toString('utf8'));
+        // Check single-cube backups (manifest.cube.uri) and multi-cube backups (manifest.cubes[].uri)
+        const backedUpUris = [];
+        if (manifest.cube && manifest.cube.uri) {
+            backedUpUris.push(manifest.cube.uri);
+        }
+        if (manifest.cubes && Array.isArray(manifest.cubes)) {
+            manifest.cubes.forEach(c => { if (c.uri) backedUpUris.push(c.uri); });
+        }
+        if (!backedUpUris.includes(cubeUri)) {
+            throw new Error(`Backup does not cover cube ${cubeUri}. Backed up cubes: ${backedUpUris.join(', ')}`);
+        }
+    } catch (err) {
+        if (err.message.includes('Backup does not cover') || err.message.includes('does not contain')) {
+            throw err;
+        }
+        throw new Error(`Failed to validate backup: ${err.message}`);
+    }
+}
+
+/**
+ * Validate that a base URL is safe (not targeting internal services).
+ * Rejects file://, ftp://, and private IP ranges to prevent SSRF.
+ */
+function validateEndpointUrl(url) {
+    if (!url || typeof url !== 'string') {
+        throw new Error('Endpoint URL is required');
+    }
+    url = url.trim();
+    // Only allow http and https
+    if (!/^https?:\/\//i.test(url)) {
+        throw new Error('Endpoint URL must use http or https protocol');
+    }
+    // Block common internal/private ranges (when not localhost)
+    const urlObj = new URL(url);
+    const hostname = urlObj.hostname.toLowerCase();
+    // Allow localhost and 127.0.0.1 (local development)
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+        return url;
+    }
+    // Block private IP ranges
+    const privatePatterns = [
+        /^10\./,
+        /^172\.(1[6-9]|2\d|3[01])\./,
+        /^192\.168\./,
+        /^169\.254\./,
+        /^0\./,
+        /^fc00:/i,
+        /^fe80:/i,
+    ];
+    for (const pattern of privatePatterns) {
+        if (pattern.test(hostname)) {
+            throw new Error('Endpoint URL must not target private network addresses');
+        }
+    }
+    return url;
+}
+
 // Log API security state on startup
 console.log(`[Security] Destructive API endpoints: ${ENABLE_DESTRUCTIVE_API ? 'ENABLED' : 'DISABLED'}`);
 console.log(`[Security] API auth token: ${API_AUTH_TOKEN ? 'CONFIGURED' : 'NOT SET (no auth required when destructive API is enabled)'}`);
@@ -112,8 +182,11 @@ if (!fs.existsSync(EXPORT_DIR)) {
     fs.mkdirSync(EXPORT_DIR, { recursive: true });
 }
 
-// Configure multer for file uploads
-const upload = multer({ dest: path.join(__dirname, 'uploads') });
+// Configure multer for file uploads with size limit (200MB)
+const upload = multer({
+    dest: path.join(__dirname, 'uploads'),
+    limits: { fileSize: 200 * 1024 * 1024 }
+});
 
 // Middleware
 app.use(express.json({ limit: '100mb' }));
@@ -990,8 +1063,8 @@ function createZipBackup(cubesData, metadata, options = {}) {
                     name: cubeName,
                     dataFile: dataFileName,
                     tripleCount: tripleCount,
-                    dataFileSize: typeof triples === 'string' ? Buffer.byteLength(triples, 'utf8') : 0,
-                    triples: typeof triples === 'string' ? triples : ''
+                    dataFileSize: Buffer.isBuffer(triples) ? triples.length : (typeof triples === 'string' ? Buffer.byteLength(triples, 'utf8') : 0),
+                    triples: (typeof triples === 'string' || Buffer.isBuffer(triples)) ? triples : ''
                 };
             });
 
@@ -1624,7 +1697,9 @@ app.post('/api/fuseki/graphs', async (req, res) => {
 app.post('/api/lindas/graphs', async (req, res) => {
     try {
         const { searchTerm } = req.body;
-        const safeTerm = searchTerm ? searchTerm.replace(/[\\"]/g, '\\$&') : '';
+
+        // Sanitize search term: only allow URI-safe characters to prevent SPARQL injection
+        const safeTerm = searchTerm ? searchTerm.replace(/[^a-zA-Z0-9._~:/?#@!$&'*+,;=%-]/g, '') : '';
 
         let query = `
             SELECT DISTINCT ?graph (COUNT(*) as ?tripleCount)
@@ -2168,17 +2243,20 @@ app.post('/api/cubes/delete-observations', requireDestructiveAccess, async (req,
     try {
         const { endpoint, baseUrl, dataset, database, repository, graphUri, cubeUri, username, password, type, backupId } = req.body;
 
-        // Require a valid backup before allowing deletion
+        // Require a valid backup that covers this specific cube before allowing deletion
         if (!backupId) {
             return res.status(400).json({ error: 'backupId is required. A backup must be created before deletion.' });
         }
+        validateBackupId(backupId);
         const backupZipPath = path.join(BACKUP_DIR, `backup_${backupId}.zip`);
         if (!fs.existsSync(backupZipPath)) {
             return res.status(400).json({ error: 'No backup found with the provided backupId. Create a backup first.' });
         }
         const safeGraphUri = validateUriParam(graphUri, 'graphUri');
         const safeCubeUri = validateUriParam(cubeUri, 'cubeUri');
+        validateBackupCoversUri(backupZipPath, safeCubeUri);
         const base = endpoint || baseUrl;
+        validateEndpointUrl(base);
         const triplestoreType = type || 'fuseki';
         const db = resolveDbName({ type: triplestoreType, dataset, database, repository });
 
@@ -2193,7 +2271,7 @@ app.post('/api/cubes/delete-observations', requireDestructiveAccess, async (req,
         }
         const auth = { username, password };
 
-        // Count triples before deletion
+        // Count triples before deletion (for reporting)
         const countQuery = `
             PREFIX cube: <https://cube.link/>
             SELECT (COUNT(*) AS ?count)
@@ -2208,25 +2286,42 @@ app.post('/api/cubes/delete-observations', requireDestructiveAccess, async (req,
         const countResult = await executeSparqlSelect(queryEndpoint, countQuery, auth);
         const triplesDeleted = parseInt(countResult.results?.bindings?.[0]?.count?.value) || 0;
 
-        const query = `
-            PREFIX cube: <https://cube.link/>
+        // Delete observations in chunks to stay within the proxy gateway timeout.
+        // Each chunked DELETE targets CHUNK_SIZE triples at a time; we loop until
+        // the count reaches zero. This avoids 504 errors on large cubes.
+        const CHUNK_SIZE = 100000;
+        const MAX_CHUNKS = 100000; // absolute safety limit
+        let chunksProcessed = 0;
+        let remaining = triplesDeleted;
 
-            DELETE {
-                GRAPH <${safeGraphUri}> {
+        while (remaining > 0 && chunksProcessed < MAX_CHUNKS) {
+            const chunkQuery = `
+                PREFIX cube: <https://cube.link/>
+                WITH <${safeGraphUri}>
+                DELETE {
                     ?obs ?p ?o .
                 }
-            }
-            WHERE {
-                GRAPH <${safeGraphUri}> {
-                    <${safeCubeUri}> cube:observationSet ?obsSet .
-                    ?obsSet cube:observation ?obs .
-                    ?obs ?p ?o .
+                WHERE {
+                    {
+                        SELECT ?obs ?p ?o
+                        WHERE {
+                            <${safeCubeUri}> cube:observationSet ?obsSet .
+                            ?obsSet cube:observation ?obs .
+                            ?obs ?p ?o .
+                        }
+                        LIMIT ${CHUNK_SIZE}
+                    }
                 }
-            }
-        `;
+            `;
+            await executeSparqlUpdate(updateEndpoint, chunkQuery, auth);
+            chunksProcessed++;
 
-        await executeSparqlUpdate(updateEndpoint, query, auth);
-        res.json({ success: true, message: 'Deleted observation triples', triplesDeleted });
+            // Re-check remaining count
+            const checkResult = await executeSparqlSelect(queryEndpoint, countQuery, auth);
+            remaining = parseInt(checkResult.results?.bindings?.[0]?.count?.value) || 0;
+        }
+
+        res.json({ success: true, message: 'Deleted observation triples', triplesDeleted, chunksProcessed });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -2237,17 +2332,20 @@ app.post('/api/cubes/delete-observation-links', requireDestructiveAccess, async 
     try {
         const { endpoint, baseUrl, dataset, database, repository, graphUri, cubeUri, username, password, type, backupId } = req.body;
 
-        // Require a valid backup before allowing deletion
+        // Require a valid backup that covers this specific cube before allowing deletion
         if (!backupId) {
             return res.status(400).json({ error: 'backupId is required. A backup must be created before deletion.' });
         }
+        validateBackupId(backupId);
         const backupZipPath = path.join(BACKUP_DIR, `backup_${backupId}.zip`);
         if (!fs.existsSync(backupZipPath)) {
             return res.status(400).json({ error: 'No backup found with the provided backupId. Create a backup first.' });
         }
         const safeGraphUri = validateUriParam(graphUri, 'graphUri');
         const safeCubeUri = validateUriParam(cubeUri, 'cubeUri');
+        validateBackupCoversUri(backupZipPath, safeCubeUri);
         const base = endpoint || baseUrl;
+        validateEndpointUrl(base);
         const triplestoreType = type || 'fuseki';
         const db = resolveDbName({ type: triplestoreType, dataset, database, repository });
 
@@ -2314,7 +2412,9 @@ app.post('/api/cubes/delete-metadata', requireDestructiveAccess, async (req, res
         }
         const safeGraphUri = validateUriParam(graphUri, 'graphUri');
         const safeCubeUri = validateUriParam(cubeUri, 'cubeUri');
+        validateBackupCoversUri(backupZipPath, safeCubeUri);
         const base = endpoint || baseUrl;
+        validateEndpointUrl(base);
         const triplestoreType = type || 'fuseki';
         const db = resolveDbName({ type: triplestoreType, dataset, database, repository });
 
@@ -2765,12 +2865,23 @@ app.post('/api/query/execute', async (req, res) => {
             return res.status(400).json({ error: 'Query is required' });
         }
 
-        // Block UPDATE queries unless destructive API is enabled
-        if (queryType === 'update' && !ENABLE_DESTRUCTIVE_API) {
-            return res.status(403).json({
-                error: 'SPARQL UPDATE queries are disabled',
-                detail: 'Set ENABLE_DESTRUCTIVE_API=true environment variable to enable update operations'
-            });
+        // Block UPDATE queries unless destructive API is enabled and auth token is valid
+        if (queryType === 'update') {
+            if (!ENABLE_DESTRUCTIVE_API) {
+                return res.status(403).json({
+                    error: 'SPARQL UPDATE queries are disabled',
+                    detail: 'Set ENABLE_DESTRUCTIVE_API=true environment variable to enable update operations'
+                });
+            }
+            if (API_AUTH_TOKEN) {
+                const authHeader = req.headers.authorization;
+                if (!authHeader || authHeader !== `Bearer ${API_AUTH_TOKEN}`) {
+                    return res.status(401).json({
+                        error: 'Authentication required for UPDATE queries',
+                        detail: 'Provide a valid Bearer token in the Authorization header'
+                    });
+                }
+            }
         }
 
         const startTime = Date.now();
@@ -2859,8 +2970,8 @@ function cleanupOldBackups() {
 cleanupOldBackups();
 setInterval(cleanupOldBackups, 60 * 60 * 1000);
 
-// Create backup before deletion
-app.post('/api/backup/create', async (req, res) => {
+// Create backup before deletion (requires auth to prevent data exfiltration)
+app.post('/api/backup/create', requireDestructiveAccess, async (req, res) => {
     try {
         const { endpoint, baseUrl, dataset, database, repository, graphUri, cubeUri, username, password, type, includeMetadata, includeOrphans } = req.body;
 
@@ -3076,8 +3187,8 @@ app.post('/api/backup/create', async (req, res) => {
 });
 
 // Create a consolidated backup for MULTIPLE cubes (all in ONE ZIP file)
-// Used before batch deletion to create a single restorable backup
-app.post('/api/backup/create-multi', async (req, res) => {
+// Used before batch deletion to create a single restorable backup (requires auth)
+app.post('/api/backup/create-multi', requireDestructiveAccess, async (req, res) => {
     try {
         const { endpoint, baseUrl, dataset, database, repository, graphUri, cubeUris, username, password, type, includeMetadata, includeOrphans } = req.body;
 
@@ -3112,8 +3223,9 @@ app.post('/api/backup/create-multi', async (req, res) => {
             ...buildAuthHeaders(auth.username, auth.password)
         };
 
-        // Fetch triples for all cubes
+        // Fetch triples for all cubes - track failures explicitly
         const cubesData = [];
+        const failedCubes = [];
         let totalTripleCount = 0;
 
         for (const cubeUri of cubeUris) {
@@ -3225,16 +3337,22 @@ app.post('/api/backup/create-multi', async (req, res) => {
             if (!response.ok) {
                 const text = await response.text();
                 console.error(`Backup query failed for ${cubeUri}: ${response.status} - ${text}`);
+                failedCubes.push(cubeUri);
                 continue; // Skip this cube but continue with others
             }
 
-            const triples = await response.text();
-            const tripleCount = triples.split('\n').filter(line => line.trim()).length;
+            // Use arrayBuffer -> Buffer to avoid the V8 ~512MB string length limit
+            // when backing up many large cubes at once
+            const tripleBuf = Buffer.from(await response.arrayBuffer());
+            let tripleCount = 0;
+            for (let i = 0; i < tripleBuf.length; i++) {
+                if (tripleBuf[i] === 0x0A) tripleCount++; // count newline bytes
+            }
             totalTripleCount += tripleCount;
 
             cubesData.push({
                 cubeUri: cubeUri,
-                triples: triples,
+                triples: tripleBuf,
                 tripleCount: tripleCount
             });
         }
@@ -3307,8 +3425,10 @@ app.post('/api/backup/create-multi', async (req, res) => {
         };
         const zipInfo = await createZipBackup(cubesData, metadata, zipOptions);
 
-        res.json({
-            success: true,
+        const responseStatus = failedCubes.length > 0 ? 207 : 200;
+        res.status(responseStatus).json({
+            success: failedCubes.length === 0,
+            partial: failedCubes.length > 0,
             backupId: zipInfo.backupId,
             cubeCount: cubesData.length,
             totalTripleCount: totalTripleCount,
@@ -3318,7 +3438,8 @@ app.post('/api/backup/create-multi', async (req, res) => {
             expiresAt: metadata.expiresAt,
             zipFilename: zipInfo.zipFilename,
             zipFileSize: zipInfo.compressedSize,
-            cubesBackedUp: cubesData.map(c => ({ uri: c.cubeUri, tripleCount: c.tripleCount }))
+            cubesBackedUp: cubesData.map(c => ({ uri: c.cubeUri, tripleCount: c.tripleCount })),
+            cubesNotBackedUp: failedCubes
         });
     } catch (error) {
         console.error('Multi-cube backup error:', error);
@@ -3879,8 +4000,8 @@ app.get('/api/backup/:backupId/export', async (req, res) => {
     }
 });
 
-// Upload and import backup file (supports ZIP and JSON formats)
-app.post('/api/backup/upload', upload.single('file'), async (req, res) => {
+// Upload and import backup file (supports ZIP and JSON formats, requires auth)
+app.post('/api/backup/upload', requireDestructiveAccess, upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'No file uploaded' });

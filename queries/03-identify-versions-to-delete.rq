@@ -15,6 +15,9 @@ WHERE {
       GRAPH <https://lindas.admin.ch/sfoe/cube> {
         ?cube a cube:Cube .
 
+        # Only consider cubes with versioned URIs (ending in /name/number)
+        FILTER(REGEX(STR(?cube), "^.*/[^/]+/[0-9]+$"))
+
         # Extract version from current cube
         BIND(REPLACE(STR(?cube), "^.*/([^/]+)/([0-9]+)$", "$2") AS ?versionStr)
         BIND(IF(REGEX(STR(?cube), "^.*/[^/]+/[0-9]+$"), xsd:integer(?versionStr), 0) AS ?version)

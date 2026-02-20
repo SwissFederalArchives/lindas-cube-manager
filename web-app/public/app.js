@@ -295,7 +295,7 @@ function initConnectionSection() {
     const datasetName = document.getElementById('dataset-name');
     if (datasetName) {
         datasetName.addEventListener('input', () => {
-            state.datasetName = datasetName.value.trim();
+            state.fusekiDataset = datasetName.value.trim();
         });
     }
 
@@ -810,6 +810,7 @@ async function downloadAllCubes() {
 
     } catch (error) {
         updateDownloadProgress('Error: ' + error.message, 0, 0, 0);
+        progressContainer.classList.add('hidden');
         console.error('Download error:', error);
     } finally {
         btn.disabled = false;
@@ -1060,6 +1061,7 @@ function goToWizardStep(step) {
 function resetWizard() {
     state.wizardStep = 1;
     state.allVersions = [];
+    state.selectedCubesForDeletion = new Set();
     state.multiVersionCubes = [];
     state.cubesToDelete = [];
     state.cubesToKeep = [];
@@ -1426,11 +1428,13 @@ async function wizardPreviewDeletions() {
             previewTable.appendChild(cubeRow);
         });
 
-        // Set up select all checkbox
+        // Set up select all checkbox (clone to remove old listeners)
         const selectAllCheckbox = document.getElementById('select-all-cubes');
         if (selectAllCheckbox) {
-            selectAllCheckbox.checked = true;
-            selectAllCheckbox.addEventListener('change', (e) => {
+            const newCheckbox = selectAllCheckbox.cloneNode(true);
+            selectAllCheckbox.parentNode.replaceChild(newCheckbox, selectAllCheckbox);
+            newCheckbox.checked = true;
+            newCheckbox.addEventListener('change', (e) => {
                 const checkboxes = previewTable.querySelectorAll('.cube-checkbox');
                 checkboxes.forEach(cb => {
                     cb.checked = e.target.checked;
@@ -1546,6 +1550,8 @@ async function wizardExecuteDeletion() {
     logContainer.classList.remove('hidden');
     btn.disabled = true;
 
+    try {
+
     const isDryRun = state.mode === 'dryrun';
 
     // Filter cubes to delete based on selection
@@ -1563,10 +1569,10 @@ async function wizardExecuteDeletion() {
     // Render deletion queue safely
     if (queueList) {
         clearElement(queueList);
-        selectedCubesToDelete.forEach(cube => {
+        selectedCubesToDelete.forEach((cube, i) => {
             const div = document.createElement('div');
             div.className = 'queue-item';
-            div.id = 'queue-' + cube.cube.replace(/[/:]/g, '_');
+            div.id = 'queue-item-' + i;
 
             const infoDiv = document.createElement('div');
             infoDiv.className = 'queue-item-info';
@@ -1699,7 +1705,7 @@ async function wizardExecuteDeletion() {
     // Now delete each cube (backup already done)
     for (let i = 0; i < selectedCubesToDelete.length; i++) {
         const cube = selectedCubesToDelete[i];
-        const queueItem = document.getElementById('queue-' + cube.cube.replace(/[/:]/g, '_'));
+        const queueItem = document.getElementById('queue-item-' + i);
 
         // Update queue item
         if (queueItem) {
@@ -1981,11 +1987,19 @@ async function wizardExecuteDeletion() {
         }
     }
 
+    if (deleted === 0 && errors > 0) {
+        addLog('ERROR: All deletions failed. No cubes were deleted.');
+    }
+
     // Move to summary step
     setTimeout(() => {
         goToWizardStep(5);
         renderWizardSummary(isDryRun);
     }, 1000);
+
+    } finally {
+        btn.disabled = false;
+    }
 }
 
 function waitForOrphanCleanupDecision() {
@@ -2830,7 +2844,7 @@ function selectBackup(backupId) {
             selectAllDiv.className = 'cube-select-all';
             const selectAllCheckbox = document.createElement('input');
             selectAllCheckbox.type = 'checkbox';
-            selectAllCheckbox.id = 'select-all-cubes';
+            selectAllCheckbox.id = 'backup-select-all-cubes';
             selectAllCheckbox.checked = true;
             selectAllCheckbox.addEventListener('change', (e) => {
                 const cubeCheckboxes = document.querySelectorAll('.cube-checkbox');
@@ -2840,7 +2854,7 @@ function selectBackup(backupId) {
                 updateSelectedCubes();
             });
             const selectAllLabel = document.createElement('label');
-            selectAllLabel.htmlFor = 'select-all-cubes';
+            selectAllLabel.htmlFor = 'backup-select-all-cubes';
             selectAllLabel.textContent = ' Select all / Deselect all';
             selectAllDiv.appendChild(selectAllCheckbox);
             selectAllDiv.appendChild(selectAllLabel);
@@ -2893,7 +2907,7 @@ function updateSelectedCubes() {
 
     // Update "Select All" checkbox state
     const allCheckboxes = document.querySelectorAll('.cube-checkbox');
-    const selectAllCheckbox = document.getElementById('select-all-cubes');
+    const selectAllCheckbox = document.getElementById('backup-select-all-cubes');
     if (selectAllCheckbox) {
         selectAllCheckbox.checked = checkboxes.length === allCheckboxes.length;
         selectAllCheckbox.indeterminate = checkboxes.length > 0 && checkboxes.length < allCheckboxes.length;
@@ -2964,7 +2978,7 @@ async function exportBackup() {
         return;
     }
 
-    window.location.href = '/api/backup/' + state.selectedBackupId + '/export';
+    window.location.href = '/api/backup/' + encodeURIComponent(state.selectedBackupId) + '/export';
 }
 
 async function deleteBackup() {
