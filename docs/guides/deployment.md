@@ -85,6 +85,30 @@ The web app connects to an external triplestore. See `docs/guides/multi-triplest
 
 ---
 
+## Proxy Timeout Requirement (Important)
+
+When running against a Stardog instance behind a reverse proxy (Nginx, HAProxy, etc.),
+the proxy's request timeout must be set to at least **300 seconds** for SPARQL UPDATE
+endpoints. The default 30-second timeout causes 504 Gateway Timeout errors when deleting
+large cube versions with millions of observations.
+
+Add to your Nginx configuration:
+
+```nginx
+location ~ ^/sparql {
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+}
+```
+
+Without this change, cube versions with very large observation sets will fail to delete.
+The tool handles these failures gracefully (logs the error, continues to the next cube),
+but those versions will remain undeleted.
+
+See `docs/reference/stardog-proxy-timeout.md` for full details and background.
+
+---
+
 ## Security Notes
 
 - Destructive API endpoints (deletion) are **disabled by default**
