@@ -18,6 +18,80 @@ const PORT = process.env.PORT || 3001;
 const ENABLE_DESTRUCTIVE_API = process.env.ENABLE_DESTRUCTIVE_API === 'true';
 const API_AUTH_TOKEN = process.env.API_AUTH_TOKEN || null;
 
+// =============================================================================
+// SERVICE-DEPLOYMENT MODE
+// When STORE_QUERY_ENDPOINT is set, the server pre-configures the triplestore
+// connection from environment variables instead of accepting it from the
+// frontend. This is the production deployment pattern (same as cube-creator).
+// =============================================================================
+const SERVICE_MODE = !!process.env.STORE_QUERY_ENDPOINT;
+let SERVICE_CONNECTION = null;
+
+if (SERVICE_MODE) {
+    const queryUrl = new URL(process.env.STORE_QUERY_ENDPOINT);
+    const pathParts = queryUrl.pathname.replace(/\/(query|update)$/, '').split('/').filter(Boolean);
+    const dbName = pathParts[pathParts.length - 1] || '';
+    const baseUrl = `${queryUrl.protocol}//${queryUrl.host}`;
+    SERVICE_CONNECTION = {
+        type: process.env.STORE_ENGINE || 'fuseki',
+        baseUrl,
+        database: dbName,
+        dataset: dbName,
+        repository: dbName,
+        username: process.env.STORE_ENDPOINTS_USERNAME || '',
+        password: process.env.STORE_ENDPOINTS_PASSWORD || '',
+        queryEndpoint: process.env.STORE_QUERY_ENDPOINT,
+        updateEndpoint: process.env.STORE_UPDATE_ENDPOINT || '',
+        graphEndpoint: process.env.STORE_GRAPH_ENDPOINT || '',
+    };
+    console.log(`Service-deployment mode: connected to ${baseUrl} [${dbName}] (${SERVICE_CONNECTION.type})`);
+}
+
+/**
+ * Merge service-mode connection fields into a request body object.
+ * In service mode, the frontend cannot override the triplestore connection.
+ * All other fields (graphUri, query, etc.) are preserved from the body.
+ */
+function getEffectiveConnection(body) {
+    if (!SERVICE_MODE) return body;
+    return {
+        ...body,
+        type: SERVICE_CONNECTION.type,
+        baseUrl: SERVICE_CONNECTION.baseUrl,
+        endpoint: SERVICE_CONNECTION.queryEndpoint,
+        dataset: SERVICE_CONNECTION.dataset,
+        database: SERVICE_CONNECTION.database,
+        repository: SERVICE_CONNECTION.repository,
+        username: SERVICE_CONNECTION.username,
+        password: SERVICE_CONNECTION.password,
+    };
+}
+
+// =============================================================================
+// KEYCLOAK AUTH (service-deployment mode only)
+// Auth is only enforced when SERVICE_MODE is active and AUTH_ISSUER is set.
+// In local dev or manual-connection mode, auth is not required.
+// =============================================================================
+const AUTH_ENABLED = SERVICE_MODE && !!process.env.AUTH_ISSUER;
+let jwtMiddleware = null;
+
+if (AUTH_ENABLED) {
+    const { expressjwt } = require('express-jwt');
+    const { expressJwtSecret } = require('jwks-rsa');
+    jwtMiddleware = expressjwt({
+        secret: expressJwtSecret({
+            cache: true,
+            rateLimit: true,
+            jwksRequestsPerMinute: 5,
+            jwksUri: `${process.env.AUTH_ISSUER}/.well-known/jwks.json`,
+        }),
+        audience: process.env.AUTH_AUDIENCE,
+        issuer: process.env.AUTH_ISSUER,
+        algorithms: ['RS256'],
+    });
+    console.log(`Keycloak auth enabled: issuer=${process.env.AUTH_ISSUER}`);
+}
+
 /**
  * Middleware to gate destructive API endpoints.
  * Blocks delete/update operations unless explicitly enabled via environment variable.
@@ -191,6 +265,31 @@ const upload = multer({
 // Middleware
 app.use(express.json({ limit: '100mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Service oidc-client library (only loaded when auth is enabled)
+app.get('/oidc-client.js', (req, res) => {
+    if (!AUTH_ENABLED) return res.status(404).send('Not found');
+    res.sendFile(path.join(__dirname, 'node_modules/oidc-client/lib/oidc-client.min.js'));
+});
+
+// Service-deployment mode: override connection fields in all POST /api/* requests
+// so that no matter what the frontend sends, the server always uses the
+// pre-configured triplestore connection from environment variables.
+if (SERVICE_MODE) {
+    app.use('/api', (req, res, next) => {
+        if (req.method === 'POST') {
+            req.body = getEffectiveConnection(req.body);
+        }
+        next();
+    });
+}
+
+// Auth middleware: protect all /api/* routes except /config and /health
+app.use('/api', (req, res, next) => {
+    if (req.path === '/config' || req.path === '/health') return next();
+    if (jwtMiddleware) return jwtMiddleware(req, res, next);
+    next();
+});
 
 // =============================================================================
 // TRIPLESTORE CONFIGURATION
@@ -1482,6 +1581,31 @@ function parseImportPackage(content, filePath = null) {
 }
 
 // API Routes
+
+// Service configuration (public — used by the frontend to detect service mode)
+// Must be public (no auth) so the frontend can bootstrap the OIDC flow.
+app.get('/api/config', (req, res) => {
+    if (SERVICE_MODE) {
+        res.json({
+            serviceMode: true,
+            connection: {
+                type: SERVICE_CONNECTION.type,
+                baseUrl: SERVICE_CONNECTION.baseUrl,
+                database: SERVICE_CONNECTION.database,
+                queryEndpoint: SERVICE_CONNECTION.queryEndpoint,
+                // credentials are never sent to the frontend
+            },
+            auth: AUTH_ENABLED ? {
+                enabled: true,
+                issuer: process.env.AUTH_ISSUER,
+                clientId: process.env.AUTH_CLIENT_ID,
+                audience: process.env.AUTH_AUDIENCE,
+            } : { enabled: false },
+        });
+    } else {
+        res.json({ serviceMode: false });
+    }
+});
 
 // Health check
 app.get('/api/health', (req, res) => {

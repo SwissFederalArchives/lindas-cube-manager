@@ -98,6 +98,9 @@
             <div class="content-wrapper">
                 <!-- Connection Section -->
                 <section id="section-connection" class="content-section active">
+                    <!-- Service-deployment mode indicator (shown instead of connection form) -->
+                    <div id="service-mode-indicator" style="display:none;" class="service-mode-banner"></div>
+
                     <div class="section-intro">
                         <p>Configure your connection to a local or remote SPARQL triplestore.</p>
                     </div>
@@ -1016,6 +1019,7 @@ Rank 3+:  DELETE (older versions)</pre>
         </main>
     </div>
 
+    <script src="/oidc-client.js"></script>
     <script src="app.js?v=2"></script>
 </body>
 </html>

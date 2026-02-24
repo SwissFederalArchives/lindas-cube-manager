@@ -1,0 +1,109 @@
+name: Promote and Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to perform"
+        required: true
+        type: choice
+        options:
+          - promote
+          - rollback-test
+          - rollback-int
+          - rollback-prod
+        default: promote
+      source_tag:
+        description: "For promote/rollback-test: date portion (e.g. 2026-02-24_143022). For rollback-int/prod: full tag (e.g. int_2026-02-24_143022)"
+        required: true
+        type: string
+
+env:
+  IMAGE: ghcr.io/swissfederalarchives/lindas-cube-manager
+
+jobs:
+  move-to-int:
+    if: github.ref == 'refs/heads/master' && inputs.action == 'promote'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: tag
+        run: echo "tag=int_$(date '+%Y-%m-%d_%H%M%S')" >> "$GITHUB_OUTPUT"
+      - run: |
+          docker buildx imagetools create \
+            --tag ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }} \
+            ${{ env.IMAGE }}:test_${{ inputs.source_tag }}
+
+  move-to-prod:
+    if: github.ref == 'refs/heads/master' && inputs.action == 'promote'
+    needs: move-to-int
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: tag
+        run: echo "tag=prod_$(date '+%Y-%m-%d_%H%M%S')" >> "$GITHUB_OUTPUT"
+      - run: |
+          docker buildx imagetools create \
+            --tag ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }} \
+            ${{ env.IMAGE }}:test_${{ inputs.source_tag }}
+
+  rollback-test:
+    if: github.ref == 'refs/heads/master' && inputs.action == 'rollback-test'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: tag
+        run: echo "tag=test_$(date '+%Y-%m-%d_%H%M%S')" >> "$GITHUB_OUTPUT"
+      - run: |
+          docker buildx imagetools create \
+            --tag ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }} \
+            ${{ env.IMAGE }}:test_${{ inputs.source_tag }}
+
+  rollback-int:
+    if: github.ref == 'refs/heads/master' && inputs.action == 'rollback-int'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: tag
+        run: echo "tag=int_$(date '+%Y-%m-%d_%H%M%S')" >> "$GITHUB_OUTPUT"
+      - run: |
+          docker buildx imagetools create \
+            --tag ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }} \
+            ${{ env.IMAGE }}:${{ inputs.source_tag }}
+
+  rollback-prod:
+    if: github.ref == 'refs/heads/master' && inputs.action == 'rollback-prod'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: tag
+        run: echo "tag=prod_$(date '+%Y-%m-%d_%H%M%S')" >> "$GITHUB_OUTPUT"
+      - run: |
+          docker buildx imagetools create \
+            --tag ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }} \
+            ${{ env.IMAGE }}:${{ inputs.source_tag }}

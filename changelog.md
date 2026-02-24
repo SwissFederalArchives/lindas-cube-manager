@@ -2,6 +2,46 @@
 
 All notable changes to the LINDAS Cube Version Cleanup Tool are documented in this file.
 
+## [2026-02-24] - Service-Deployment Mode, Keycloak Auth, CI/CD, GitOps
+
+### Added
+
+- **Service-deployment mode** (`server.js`): When `STORE_QUERY_ENDPOINT` is set in the
+  environment, the server pre-configures the triplestore connection and ignores any connection
+  parameters sent by the frontend. A single Express middleware applies the override to all
+  POST `/api/*` routes so no individual handler needed to change.
+
+- **`/api/config` endpoint** (`server.js`): Public endpoint that returns `{ serviceMode,
+  connection, auth }`. Used by the frontend to detect service mode and bootstrap the OIDC flow.
+
+- **Keycloak JWT authentication** (`server.js`): When both `SERVICE_MODE` and `AUTH_ISSUER` are
+  set, all `/api/*` routes (except `/api/config` and `/api/health`) require a valid RS256 JWT
+  from the configured Keycloak realm. Uses `express-jwt` + `jwks-rsa` (same packages as
+  cube-creator).
+
+- **OIDC authorization code + PKCE flow** (`public/app.js`, `public/index.html`): When the
+  server returns `auth.enabled: true` from `/api/config`, the frontend starts an OIDC flow
+  using the `oidc-client` library (served from `/oidc-client.js`). All `fetch('/api/...` calls
+  replaced with `authFetch('/api/...` wrapper that injects the Bearer token.
+
+- **Service-mode banner** (`public/index.html`, `public/styles.css`): Shows a locked-connection
+  indicator when running in service mode, hiding the manual connection form.
+
+- **GitHub Actions CI/CD** (`.github/workflows/`):
+  - `docker.yaml`: Builds and pushes `master`, `test_YYYY-MM-DD_HHmmss`, and `sha-*` tags on
+    every push to master. Mirrors cube-creator's tag naming exactly.
+  - `promote.yaml`: Manual workflow to promote `test_*` to `int_*` + `prod_*` via retag (no
+    rebuild). Also supports rollback actions for each environment.
+
+- **GitOps Kubernetes manifests** (in `gitops-main`):
+  - `zazuko-test/cube-manager/`: configmap, deployment (master tag, Always pull), service, pvc
+  - `zazuko-int/cube-manager/`: configmap, deployment (Flux-managed int_ tag), service, pvc, flux
+
+- **New npm dependencies**: `express-jwt@^8.3.0`, `jwks-rsa@^3.0.0`, `oidc-client@^1.11.5`
+
+- **Local docker-compose integration** (`local-setup/docker-compose.yml`): Added `cube-manager`
+  service with service-deployment mode enabled (pointing to local Fuseki). Port `8090`.
+
 ## [2026-02-20] - Fix 504 Gateway Timeout on Large Cube Observation Deletion
 
 ### Fixed

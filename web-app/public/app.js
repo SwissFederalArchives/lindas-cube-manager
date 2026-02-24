@@ -123,7 +123,130 @@ document.addEventListener('DOMContentLoaded', () => {
     // Load initial state
     updateModeUI();
     updateConnectionUI();
+    // Service-deployment mode (must run after other inits)
+    initServiceMode();
 });
+
+// ============================================================================
+// Service-Deployment Mode
+// When the server is running with STORE_QUERY_ENDPOINT set, it returns
+// serviceMode:true from /api/config. The UI hides the connection form and
+// shows a locked-connection banner instead.
+// ============================================================================
+
+let currentAuthToken = null;
+
+function setAuthToken(token) {
+    currentAuthToken = token;
+}
+
+function scheduleTokenRenewal(mgr) {
+    mgr.events.addUserLoaded(user => setAuthToken(user.access_token));
+    mgr.events.addAccessTokenExpiring(() => mgr.signinSilent().catch(console.error));
+}
+
+/**
+ * Thin fetch wrapper that injects the Bearer token when an OIDC session is active.
+ * Used in place of bare fetch() for all /api/* calls.
+ */
+function authFetch(url, options = {}) {
+    if (currentAuthToken) {
+        options.headers = {
+            ...options.headers,
+            Authorization: 'Bearer ' + currentAuthToken,
+        };
+    }
+    return fetch(url, options);
+}
+
+async function initOidcAuth(authCfg) {
+    const { issuer, clientId } = authCfg;
+    if (typeof Oidc === 'undefined') {
+        console.warn('oidc-client not loaded — auth skipped');
+        return;
+    }
+    const mgr = new Oidc.UserManager({
+        authority: issuer,
+        client_id: clientId,
+        redirect_uri: window.location.origin + '/',
+        response_type: 'code',
+        scope: 'openid profile email',
+        automaticSilentRenew: true,
+        userStore: new Oidc.WebStorageStateStore({ store: window.sessionStorage }),
+    });
+
+    // Handle authorization code callback
+    if (window.location.search.includes('code=')) {
+        try {
+            const user = await mgr.signinRedirectCallback();
+            window.history.replaceState({}, document.title, window.location.pathname);
+            setAuthToken(user.access_token);
+            scheduleTokenRenewal(mgr);
+        } catch (err) {
+            console.error('OIDC callback error:', err);
+        }
+        return;
+    }
+
+    // Check for an existing valid session
+    const user = await mgr.getUser();
+    if (user && !user.expired) {
+        setAuthToken(user.access_token);
+        scheduleTokenRenewal(mgr);
+        return;
+    }
+
+    // No session found — redirect to Keycloak login
+    await mgr.signinRedirect({ state: window.location.pathname });
+}
+
+async function initServiceMode() {
+    try {
+        const res = await authFetch('/api/config');
+        const cfg = await res.json();
+        if (!cfg.serviceMode) return;
+
+        // Hide the manual connection form; show the locked-connection banner
+        const connSection = document.getElementById('section-connection');
+        if (connSection) {
+            // Hide the intro text and the connection card (everything except the banner)
+            const sectionIntro = connSection.querySelector('.section-intro');
+            const modeInfoBanner = connSection.querySelector('#mode-info-banner');
+            const card = connSection.querySelector('.card');
+            const quickGrid = connSection.querySelector('.quick-setup-grid');
+            if (sectionIntro) sectionIntro.style.display = 'none';
+            if (modeInfoBanner) modeInfoBanner.style.display = 'none';
+            if (card) card.style.display = 'none';
+            if (quickGrid) quickGrid.style.display = 'none';
+        }
+
+        const indicator = document.getElementById('service-mode-indicator');
+        if (indicator) {
+            indicator.textContent =
+                'Connected to ' + cfg.connection.database +
+                ' (' + cfg.connection.type + ') - managed by environment';
+            indicator.style.display = 'block';
+        }
+
+        // Pre-fill state so any remaining code that reads it still works
+        state.triplestoreType = cfg.connection.type;
+        state.endpointUrl = cfg.connection.baseUrl;
+        state.fusekiDataset = cfg.connection.database;
+        state.stardogDatabase = cfg.connection.database;
+        state.graphdbRepository = cfg.connection.database;
+        state.connected = true;
+
+        // Update UI to reflect connected state
+        updateConnectionUI();
+
+        // Start OIDC flow if auth is enabled
+        if (cfg.auth && cfg.auth.enabled) {
+            await initOidcAuth(cfg.auth);
+        }
+    } catch (err) {
+        console.warn('Could not fetch /api/config:', err);
+    }
+}
 
 // ============================================================================
 // Navigation
@@ -471,7 +594,7 @@ async function testConnection() {
 
     try {
         const config = getConnectionConfig();
-        const response = await fetch('/api/triplestore/check', {
+        const response = await authFetch('/api/triplestore/check', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(config)
@@ -510,7 +633,7 @@ async function createDataset() {
 
     try {
         const config = getConnectionConfig();
-        const response = await fetch('/api/triplestore/create-dataset', {
+        const response = await authFetch('/api/triplestore/create-dataset', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(config)
@@ -662,7 +785,7 @@ async function loadLindasGraphs() {
     graphSelect.appendChild(loadingOpt);
 
     try {
-        const response = await fetch('/api/lindas/all-graphs', {
+        const response = await authFetch('/api/lindas/all-graphs', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ lindasEndpoint: state.lindasEnv })
@@ -720,7 +843,7 @@ async function downloadAllCubes() {
         // First, get list of cubes
         updateDownloadProgress('Fetching cube list...', 0, 0, 0);
 
-        const cubesResponse = await fetch('/api/lindas/cubes', {
+        const cubesResponse = await authFetch('/api/lindas/cubes', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -758,7 +881,7 @@ async function downloadAllCubes() {
                 }
 
                 // Download cube data from LINDAS
-                const downloadResponse = await fetch('/api/lindas/download-cube', {
+                const downloadResponse = await authFetch('/api/lindas/download-cube', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -775,7 +898,7 @@ async function downloadAllCubes() {
                 }
 
                 // Import to local triplestore
-                const importResponse = await fetch('/api/triplestore/import', {
+                const importResponse = await authFetch('/api/triplestore/import', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -836,7 +959,7 @@ async function downloadSampleData() {
         const sampleCube = 'https://energy.ld.admin.ch/sfoe/bfe_ogd18_gebaeudeprogramm_co2wirkung';
 
         // Download all versions of the sample cube
-        const response = await fetch('/api/lindas/download-graph', {
+        const response = await authFetch('/api/lindas/download-graph', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -853,7 +976,7 @@ async function downloadSampleData() {
         }
 
         // Import to local triplestore
-        const importResponse = await fetch('/api/triplestore/import', {
+        const importResponse = await authFetch('/api/triplestore/import', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1112,7 +1235,7 @@ async function wizardLoadGraph() {
         const config = getConnectionConfig();
 
         // Query for all cube versions
-        const response = await fetch('/api/cubes/list-versions', {
+        const response = await authFetch('/api/cubes/list-versions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1325,7 +1448,7 @@ async function wizardPreviewDeletions() {
         const config = getConnectionConfig();
 
         // Get deletion preview from server
-        const response = await fetch('/api/cubes/identify-deletions', {
+        const response = await authFetch('/api/cubes/identify-deletions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1643,7 +1766,7 @@ async function wizardExecuteDeletion() {
         let consolidatedBackupId = null;
         try {
             const cubeUris = selectedCubesToDelete.map(c => c.cube);
-            const backupResponse = await fetch('/api/backup/create-multi', {
+            const backupResponse = await authFetch('/api/backup/create-multi', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1731,7 +1854,7 @@ async function wizardExecuteDeletion() {
 
                 // Step 2: Delete observations
                 addLog('  Deleting observations...');
-                const obsResponse = await fetch('/api/cubes/delete-observations', {
+                const obsResponse = await authFetch('/api/cubes/delete-observations', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1751,7 +1874,7 @@ async function wizardExecuteDeletion() {
 
                 // Step 3: Delete observation links
                 addLog('  Deleting observation links...');
-                const linksResponse = await fetch('/api/cubes/delete-observation-links', {
+                const linksResponse = await authFetch('/api/cubes/delete-observation-links', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1771,7 +1894,7 @@ async function wizardExecuteDeletion() {
 
                 // Step 4: Delete metadata
                 addLog('  Deleting metadata...');
-                const metaResponse = await fetch('/api/cubes/delete-metadata', {
+                const metaResponse = await authFetch('/api/cubes/delete-metadata', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1838,7 +1961,7 @@ async function wizardExecuteDeletion() {
             addLog('--- ORPHAN SHAPE CLEANUP ---');
             addLog('Detecting orphan triples (observation sets and SHACL shapes)...');
             try {
-                const detectResponse = await fetch('/api/orphans/detect', {
+                const detectResponse = await authFetch('/api/orphans/detect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1891,7 +2014,7 @@ async function wizardExecuteDeletion() {
                             addLog('');
                             addLog('Fetching orphan shape triple preview...');
                             try {
-                                const previewResponse = await fetch('/api/orphans/shapes/preview', {
+                                const previewResponse = await authFetch('/api/orphans/shapes/preview', {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({
@@ -2058,7 +2181,7 @@ async function performOrphanCleanup(config, addLog) {
     addLog('');
     addLog('Cleaning up orphan triples (observation sets + SHACL shapes)...');
     try {
-        const cleanupResponse = await fetch('/api/orphans/cleanup', {
+        const cleanupResponse = await authFetch('/api/orphans/cleanup', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2414,7 +2537,7 @@ async function executeQuery() {
 
     try {
         const config = getConnectionConfig();
-        const response = await fetch('/api/query/execute', {
+        const response = await authFetch('/api/query/execute', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2542,7 +2665,7 @@ async function browseGraphs() {
 
     try {
         const config = getConnectionConfig();
-        const response = await fetch('/api/query/graphs', {
+        const response = await authFetch('/api/query/graphs', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(config)
@@ -2593,7 +2716,7 @@ async function browseCubes() {
 
     try {
         const config = getConnectionConfig();
-        const response = await fetch('/api/query/cubes', {
+        const response = await authFetch('/api/query/cubes', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2713,7 +2836,7 @@ async function loadBackupList() {
     if (previewCard) previewCard.style.display = 'none';
 
     try {
-        const response = await fetch('/api/backup/list');
+        const response = await authFetch('/api/backup/list');
         const result = await response.json();
 
         if (!response.ok) {
@@ -2937,7 +3060,7 @@ async function restoreBackup() {
 
     try {
         const config = getConnectionConfig();
-        const response = await fetch('/api/backup/restore-to', {
+        const response = await authFetch('/api/backup/restore-to', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2992,7 +3115,7 @@ async function deleteBackup() {
     }
 
     try {
-        const response = await fetch('/api/backup/' + state.selectedBackupId, {
+        const response = await authFetch('/api/backup/' + state.selectedBackupId, {
             method: 'DELETE'
         });
 
@@ -3023,7 +3146,7 @@ async function handleBackupFileUpload(file) {
         const formData = new FormData();
         formData.append('file', file);
 
-        const response = await fetch('/api/backup/upload', {
+        const response = await authFetch('/api/backup/upload', {
             method: 'POST',
             body: formData
         });
@@ -3083,7 +3206,7 @@ async function importBackupFile() {
 
     try {
         const config = getConnectionConfig();
-        const response = await fetch('/api/backup/import', {
+        const response = await authFetch('/api/backup/import', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

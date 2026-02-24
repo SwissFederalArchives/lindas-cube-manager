@@ -11,9 +11,12 @@
     "adm-zip": "^0.5.10",
     "archiver": "^6.0.1",
     "express": "^4.18.2",
+    "express-jwt": "^8.3.0",
+    "jwks-rsa": "^3.0.0",
     "multer": "^2.0.2",
     "n3": "^1.17.2",
     "node-fetch": "^2.7.0",
+    "oidc-client": "^1.11.5",
     "stardog": "^9.1.1"
   },
   "author": "Giulio V",

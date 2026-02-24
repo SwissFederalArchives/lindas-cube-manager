@@ -2089,3 +2089,22 @@ table.data-table {
         display: none;
     }
 }
+
+/* ============================================================================
+   SERVICE-DEPLOYMENT MODE BANNER
+   Displayed when the server is running in service mode (STORE_QUERY_ENDPOINT set)
+   and the triplestore connection is pre-configured via environment variables.
+   ============================================================================ */
+
+.service-mode-banner {
+    display: block;
+    background-color: var(--info-light, #cffafe);
+    border: 1px solid var(--info-color, #0891b2);
+    border-left: 4px solid var(--info-color, #0891b2);
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    color: #0e4f61;
+    font-size: 14px;
+    font-weight: 500;
+}
