@@ -2,6 +2,23 @@
 
 All notable changes to the LINDAS Cube Version Cleanup Tool are documented in this file.
 
+## [2026-02-24b] - Bug fixes from post-implementation review
+
+### Fixed
+
+- **`getEffectiveConnection()` double-path URL bug** (`server.js`): Removed the `endpoint` field
+  from the merged connection object. Setting `endpoint` to the full SPARQL query URL
+  (`http://host:port/db/query`) caused handlers that append path segments (such as
+  `/api/fuseki/import`, `/api/cubes/count-observations`, `/api/cubes/count-triples`) to produce
+  broken double-path URLs like `http://host:port/db/query/db/query`. Handlers that need the query
+  URL construct it from `baseUrl` + `database`, which are already set correctly.
+
+- **Missing HTTP status check in `initServiceMode()`** (`public/app.js`): Added `res.ok` guard
+  before calling `res.json()`. Without this, a non-200 response from `/api/config` would cause
+  `res.json()` to throw or produce garbled state silently.
+
+---
+
 ## [2026-02-24] - Service-Deployment Mode, Keycloak Auth, CI/CD, GitOps
 
 ### Added

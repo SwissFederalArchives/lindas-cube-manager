@@ -58,7 +58,6 @@ function getEffectiveConnection(body) {
         ...body,
         type: SERVICE_CONNECTION.type,
         baseUrl: SERVICE_CONNECTION.baseUrl,
-        endpoint: SERVICE_CONNECTION.queryEndpoint,
         dataset: SERVICE_CONNECTION.dataset,
         database: SERVICE_CONNECTION.database,
         repository: SERVICE_CONNECTION.repository,

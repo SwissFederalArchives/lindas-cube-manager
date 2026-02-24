@@ -203,6 +203,10 @@ async function initOidcAuth(authCfg) {
 async function initServiceMode() {
     try {
         const res = await authFetch('/api/config');
+        if (!res.ok) {
+            console.error('Failed to fetch service config:', res.status);
+            return;
+        }
         const cfg = await res.json();
         if (!cfg.serviceMode) return;
 
