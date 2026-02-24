@@ -34,6 +34,7 @@ if (SERVICE_MODE) {
     const baseUrl = `${queryUrl.protocol}//${queryUrl.host}`;
     SERVICE_CONNECTION = {
         type: process.env.STORE_ENGINE || 'fuseki',
+        mode: 'local',
         baseUrl,
         database: dbName,
         dataset: dbName,
@@ -57,6 +58,7 @@ function getEffectiveConnection(body) {
     return {
         ...body,
         type: SERVICE_CONNECTION.type,
+        mode: SERVICE_CONNECTION.mode,
         baseUrl: SERVICE_CONNECTION.baseUrl,
         dataset: SERVICE_CONNECTION.dataset,
         database: SERVICE_CONNECTION.database,
@@ -267,7 +269,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Service oidc-client library (only loaded when auth is enabled)
 app.get('/oidc-client.js', (req, res) => {
-    if (!AUTH_ENABLED) return res.status(404).send('Not found');
+    if (!AUTH_ENABLED) return res.type('js').send('/* oidc-client not enabled */');
     res.sendFile(path.join(__dirname, 'node_modules/oidc-client/lib/oidc-client.min.js'));
 });
 
@@ -2529,6 +2531,7 @@ app.post('/api/cubes/delete-metadata', requireDestructiveAccess, async (req, res
         if (!backupId) {
             return res.status(400).json({ error: 'backupId is required. A backup must be created before deletion.' });
         }
+        validateBackupId(backupId);
         const backupZipPath = path.join(BACKUP_DIR, `backup_${backupId}.zip`);
         if (!fs.existsSync(backupZipPath)) {
             return res.status(400).json({ error: 'No backup found with the provided backupId. Create a backup first.' });
@@ -2670,12 +2673,13 @@ app.post('/api/cubes/delete-metadata', requireDestructiveAccess, async (req, res
 // Count remaining observations for a cube
 app.post('/api/cubes/count-observations', async (req, res) => {
     try {
-        const { endpoint, dataset, graphUri, cubeUri, username, password } = req.body;
+        const { endpoint, baseUrl, dataset, graphUri, cubeUri, username, password } = req.body;
 
         // Validate URI parameters to prevent SPARQL injection
         validateUriParam(graphUri, 'graphUri');
         validateUriParam(cubeUri, 'cubeUri');
-        const sparqlEndpoint = dataset ? `${endpoint}/${dataset}/query` : endpoint;
+        const base = endpoint || baseUrl;
+        const sparqlEndpoint = dataset ? `${base}/${dataset}/query` : base;
         const auth = { username, password };
 
         const query = `
@@ -2701,11 +2705,12 @@ app.post('/api/cubes/count-observations', async (req, res) => {
 // Count total triples in a graph
 app.post('/api/cubes/count-triples', async (req, res) => {
     try {
-        const { endpoint, dataset, graphUri, username, password } = req.body;
+        const { endpoint, baseUrl, dataset, graphUri, username, password } = req.body;
 
         // Validate URI parameter to prevent SPARQL injection
         validateUriParam(graphUri, 'graphUri');
-        const sparqlEndpoint = dataset ? `${endpoint}/${dataset}/query` : endpoint;
+        const base = endpoint || baseUrl;
+        const sparqlEndpoint = dataset ? `${base}/${dataset}/query` : base;
         const auth = { username, password };
 
         const query = `

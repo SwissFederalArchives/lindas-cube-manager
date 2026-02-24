@@ -2,6 +2,40 @@
 
 All notable changes to the LINDAS Cube Version Cleanup Tool are documented in this file.
 
+## [2026-02-24c] - Second round of bug fixes from code review
+
+### Fixed
+
+- **`count-observations` and `count-triples` produce broken URLs in service mode** (`server.js`):
+  Both handlers were destructuring `endpoint` from `req.body` and constructing
+  `${endpoint}/${dataset}/query`. In service mode, `getEffectiveConnection` injects `baseUrl`
+  but never `endpoint`, so `endpoint` is always `undefined` — producing `undefined/lindas/query`.
+  Fixed by extracting both `endpoint` and `baseUrl` and using `const base = endpoint || baseUrl`
+  before constructing the SPARQL endpoint URL, matching the pattern used everywhere else in the file.
+
+- **`buildEndpoints` falls back to Fuseki defaults for Stardog in service mode** (`server.js`):
+  `getEffectiveConnection` overrode `type` (e.g., `'stardog'`) but not `mode`. `buildEndpoints`
+  uses `TRIPLESTORE_DEFAULTS[type][mode]` as a compound key — if `mode` is undefined, the lookup
+  returns `undefined` and the code falls back to `TRIPLESTORE_DEFAULTS.fuseki.local`, giving Fuseki
+  path templates to the Stardog `case` branch. The `replace('{database}', db)` call then silently
+  fails to substitute, leaving the literal `{dataset}` in the URL. Fixed by adding `mode: 'local'`
+  to `SERVICE_CONNECTION` and injecting it in `getEffectiveConnection`.
+
+- **Missing `validateBackupId()` in `delete-metadata` handler** (`server.js`): Pre-existing path
+  traversal vulnerability — the handler checked `if (!backupId)` but skipped `validateBackupId()`,
+  which is present in all other deletion handlers. Without it, a crafted `backupId` like
+  `../../etc/passwd` passes the empty-check and reaches `path.join(BACKUP_DIR, ...)`. Fixed by
+  adding `validateBackupId(backupId)` immediately after the empty check, matching the pattern in
+  `delete-observations` and `delete-observation-links`.
+
+- **`/oidc-client.js` returns 404 in non-auth deployments causing browser console error** (`server.js`):
+  The route returned HTTP 404 when `AUTH_ENABLED` is false. The `<script src="/oidc-client.js">` tag
+  in `index.html` is always loaded, causing a noisy browser console error on every page load even
+  though `app.js` handles the missing library gracefully. Fixed by returning an empty JS body
+  (`200 /* oidc-client not enabled */`) instead of 404, eliminating the console error.
+
+---
+
 ## [2026-02-24b] - Bug fixes from post-implementation review
 
 ### Fixed
