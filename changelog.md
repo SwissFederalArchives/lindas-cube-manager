@@ -2,6 +2,15 @@
 
 All notable changes to the LINDAS Cube Version Cleanup Tool are documented in this file.
 
+## [2026-02-25] - Pre-deployment validation fixes
+
+### Fixed
+
+- **Dockerfile HEALTHCHECK path mismatch** (`Dockerfile`): The Docker HEALTHCHECK
+  was probing `http://localhost:3001/` (root path) while the Kubernetes readiness
+  and liveness probes use `/api/health`. Changed to `http://localhost:3001/api/health`
+  to ensure consistent health reporting across Docker and Kubernetes.
+
 ## [2026-02-24c] - Second round of bug fixes from code review
 
 ### Fixed
